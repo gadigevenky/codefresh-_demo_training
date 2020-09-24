@@ -1,0 +1,118 @@
+version: '1.0'
+stages:
+  - cleanup  
+  - clone
+  - values.yaml
+  - deploy
+
+steps:
+
+#  SendToSlack:
+#    type: slack-notifier
+#    stage: deploy
+#    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+#      SLACK_TEXT: 'Dev Deploy run for API'
+
+  clean_repos:
+    title: build custom values.yaml
+    stage: cleanup
+    type: freestyle
+    fail_fast: false
+    arguments:
+      image: 'ubuntu'
+      commands:
+      - rm /codefresh/volume/values.yaml
+      - rm -rf /codefresh/volume/kube-helm 
+
+#Clone helm repo
+  helm_clone: 
+    title: Cloning helm values repository...
+    stage: clone
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+
+#freestyle create deployment values.yaml
+  prepdeployfile:
+    title: build custom values.yaml
+    stage: values.yaml
+    type: freestyle
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      image: 'ubuntu'
+      commands:
+      - apt update
+      - cp /codefresh/volume/kube-helm/Helm_values/templates/API-2_values.yaml ./values.yaml
+      - echo ${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID}}
+#      - cp /codefresh/volume/kube-helm/Helm_values/templates/API-2_dev.sh ./API-2_dev.sh
+#      - chmod +x ./API-2_dev.sh
+#      - chmod 700 ./API-2_dev.sh
+#      - ./API-2_dev.sh
+# #Project Variables 
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID+"${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET+"${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.SNOWFLAKE.USER+"${{EXTERNAL_CONNECTIONS.SNOWFLAKE.USER}}"+g" "./values.yaml"
+      - sed -i "s+ENV.MAIL_USERNAME+"${{ENV.MAIL_USERNAME}}"+g" "./values.yaml"
+      - sed -i "s+ENV.MAIL_PASSWORD+"${{ENV.MAIL_PASSWORD}}"+g" "./values.yaml"
+      - sed -i "s+IMAGECREDENTIALS.USERNAME+"${{IMAGECREDENTIALS.USERNAME}}"+g" "./values.yaml"
+# #Pipeline Variables  
+      - sed -i "s+IMAGE +"${{API_IMAGE}}"+g" "./values.yaml"
+      - sed -i "s+REPLICACOUNT+"${{REPLICACOUNT}}"+g" "./values.yaml"
+      - sed -i "s+API_IMAGE+"${{API_IMAGE}}"+g" "./values.yaml"
+      - sed -i "s+INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.SECURITY-GROUPS+"${{INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.SECURITY-GROUPS}}"+g" "./values.yaml"
+      - sed -i "s+INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.CERTIFICATE-ARN+"${{INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.CERTIFICATE-ARN}}"+g" "./values.yaml"
+      - sed -i "s+INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.LISTEN-PORTS+"${{INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.LISTEN-PORTS}}"+g" "./values.yaml"
+      - sed -i "s+INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.ACTIONS.SSL-REDIRECT+"${{INGRESS.ANNOTATIONS.ALB.INGRESS.KUBERNETES.IO.ACTIONS.SSL-REDIRECT}}"+g" "./values.yaml"
+      - sed -i "s+HOSTS+"${{HOSTS}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.DB.HOST+"${{EXTERNAL_CONNECTIONS.DB.HOST}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.DB.USERNAME+"${{EXTERNAL_CONNECTIONS.DB.USERNAME}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.DB.PASSWORD+"${{EXTERNAL_CONNECTIONS.DB.PASSWORD}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID+"${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET+"${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.EMBED_SECRET+"${{EXTERNAL_CONNECTIONS.LOOKER.EMBED_SECRET}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.LOOKER.EMBED_DOMAIN+"${{EXTERNAL_CONNECTIONS.LOOKER.EMBED_DOMAIN}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.AWS.S3.ACCESS_KEY_ID+"${{EXTERNAL_CONNECTIONS.AWS.S3.ACCESS_KEY_ID}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.AWS.S3.SECRET_ACCESS_KEY+"${{EXTERNAL_CONNECTIONS.AWS.S3.SECRET_ACCESS_KEY}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.AWS.S3.BUCKET+"${{EXTERNAL_CONNECTIONS.AWS.S3.BUCKET}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.AWS.S3.ROLE_ARN+"${{EXTERNAL_CONNECTIONS.AWS.S3.ROLE_ARN}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.SNOWFLAKE.DATABASE+"${{EXTERNAL_CONNECTIONS.SNOWFLAKE.DATABASE}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.AIRFLOW.URL+"${{EXTERNAL_CONNECTIONS.AIRFLOW.URL}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.UMS.BASE_URI+"${{EXTERNAL_CONNECTIONS.UMS.BASE_URI}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.UMS.LICENSE_KEY+"${{EXTERNAL_CONNECTIONS.UMS.LICENSE_KEY}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_ENV+"${{ENV.APP_ENV}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_DEBUG+"${{ENV.APP_DEBUG}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_KEY+"${{ENV.APP_KEY}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_URL+"${{ENV.APP_URL}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_FRONTEND_URL+"${{ENV.APP_FRONTEND_URL}}"+g" "./values.yaml"
+      - sed -i "s+ENV.APP_FRONTEND_URL+"${{ENV.APP_FRONTEND_URL}}"+g" "./values.yaml"
+      - sed -i "s+ENV.MAIL_DRIVER+"${{ENV.MAIL_DRIVER}}"+g" "./values.yaml"
+      - sed -i "s+ENV.LOG_CHANNEL+"${{ENV.LOG_CHANNEL}}"+g" "./values.yaml"
+      - sed -i "s+EXTERNAL_CONNECTIONS.SNOWFLAKE.PASSWORD+"${{EXTERNAL_CONNECTIONS.SNOWFLAKE.PASSWORD}}"+g" "./values.yaml"
+      - sed -i "s+IMAGECREDENTIALS.PASSWORD+"${{IMAGECREDENTIALS.PASSWORD}}"+g" "./values.yaml"
+      - cat ./values.yaml
+ #     - diff -b -B values.yaml ./kube-helm/Helm_values/API/api_helm_values_dev.yaml 
+      - apt install colordiff -y
+      - colordiff -y -W 120 values.yaml ./kube-helm/Helm_values/API/qa_audit.yaml
+
+
+  eks_helm_deploy:
+    title: Deploy to AWS EKS with Helm
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      kube_context: ocr-aws-dev-eks001
+      commands:
+        - source /opt/bin/release_chart
+        - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+        - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+        - helm repo list
+        - helm repo update
+        - helm list
+#        - helm upgrade api helm/api -f ./values.yaml --recreate-pods 
+            #- echo $NEW_CHART_VERSION

@@ -1,0 +1,290 @@
+version: '1.0'
+stages:
+  - clone
+  - deploy
+  - report
+
+steps:
+  PreSendToSlack:
+    type: slack-notifier
+    stage: clone
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API deploy started'
+
+  CleanRepos:
+    title: remove kube-helm and values.yaml
+    stage: clone
+    type: freestyle
+    fail_fast: false
+    arguments:
+      image: 'ubuntu'
+      commands:
+      - rm -rf /codefresh/volume/kube-helm 
+
+  HelmClone: 
+    title: Cloning helm values repository...
+    stage: clone
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+
+  devHelmDeploy:
+    title: Deploy to dev
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      helm_version: 3.0.3
+      kube_context: ocr-aws-dev-eks001
+      commands:
+          - source /opt/bin/release_chart
+          - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+          - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+          - helm repo list
+          - helm repo update
+          - helm list
+          - ls ./kube-helm/Helm_values/API/
+          - echo IMAGE=${{API_BRANCH}}-${{CF_SHORT_REVISION}}
+          - helm upgrade api helm/api -f ./kube-helm/Helm_values/API/api_helm_values_dev.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/api:${{API_BRANCH}}-${{CF_SHORT_REVISION}}
+    when:
+      condition:
+        all:
+          executeForBranch: "'${{dev_Branch}}' == 'deploy'" 
+
+  qaHelmDeploy:
+    title: Deploy to qa
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      kube_context: ocr-aws-qa-eks001
+      helm_version: 3.0.3
+      commands:
+          - source /opt/bin/release_chart
+          - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+          - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+          - helm repo list
+          - helm repo update
+          - helm list
+          - ls ./kube-helm/Helm_values/API/
+          - echo IMAGE=${{API_BRANCH}}-${{CF_SHORT_REVISION}}
+          - helm upgrade api helm/api -f ./kube-helm/Helm_values/API/api_helm_values_qa.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/api:${{API_BRANCH}}-${{CF_SHORT_REVISION}}
+    when:
+      condition:
+        all:
+          executeForBranch: "'${{qa_Branch}}' == 'deploy'"             
+
+  stgHelmDeploy:
+    title: Deploy to stg
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      kube_context: ocr-aws-staging-eks001
+      helm_version: 3.0.3
+      commands:
+          - source /opt/bin/release_chart
+          - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+          - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+          - helm repo list
+          - helm repo update
+          - helm list
+          - ls ./kube-helm/Helm_values/API/
+          - helm upgrade api helm/api -f ./kube-helm/Helm_values/API/api_helm_values_stage.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/api:release-candidate
+    when:
+      condition:
+        all:
+          executeForBranch: "'${{stg_Branch}}' == 'deploy'" 
+
+  preprodHelmDeploy:
+    title: Deploy to preprod
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      kube_context: ocr-aws-staging-eks001
+      helm_version: 3.0.3
+      commands:
+          - source /opt/bin/release_chart
+          - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+          - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+          - helm repo list
+          - helm repo update
+          - helm list
+          - ls ./kube-helm/Helm_values/API/
+          - helm upgrade apipre helm/api -f ./kube-helm/Helm_values/API/api_helm_values_preprod.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/api:release-candidate
+    when:
+      condition:
+        all:
+          executeForBranch: "'${{preprod_Branch}}' == 'deploy'"                    
+
+  prodHelmDeploy:
+    title: Deploy to prod
+    stage: deploy
+    type: helm
+    fail_fast: false
+    working_directory: ./
+    arguments:
+      action: auth
+      kube_context: ocr-aws-prod-eks001
+      helm_version: 3.0.3
+      commands:
+          - source /opt/bin/release_chart
+          - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+          - helm repo add stable https://kubernetes-charts.storage.googleapis.com
+          - helm repo list
+          - helm repo update
+          - helm list
+          - ls ./kube-helm/Helm_values/API/
+#          - helm upgrade api helm/api -f ./kube-helm/Helm_values/API/api_helm_values_prod.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/api:release-candidate
+    when:
+      condition:
+        all:
+          executeForBranch: "'${{prod_Branch}}' == 'deploy'" 
+          executeForManualOnly: "'${{TRIGGER_TYPE}}' == 'manual'"     
+
+### Report dev deployments
+
+  DevSendToSlackFail:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Failed API deploy to DEV branch ${{API_BRANCH}}-${{CF_SHORT_REVISION}} failed***'
+    when:
+      condition:
+        any:
+          DevHelmDeploy_fail: devHelmDeploy.result == 'failure'
+          DevHelmDeploy_error: devHelmDeploy.result == 'error'   
+
+  DevSendToSlackPass:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API ${{API_BRANCH}}-${{CF_SHORT_REVISION}} deployed to dev'
+    when:
+      condition:
+       any:
+         DevHelmDeploy_success: devHelmDeploy.result == 'success' 
+
+### Report qa deployments
+
+  qaSendToSlackFail:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Failed API deploy to QA branch ${{API_BRANCH}}-${{CF_SHORT_REVISION}} failed***'
+    when:
+      condition:
+        any:
+          qaHelmDeploy_fail: qaHelmDeploy.result == 'failure'
+          qaHelmDeploy_error: qaHelmDeploy.result == 'error'   
+
+  qaSendToSlackPass:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API ${{API_BRANCH}}-${{CF_SHORT_REVISION}} deployed to qa'
+    when:
+      condition:
+        all:
+          qaHelmDeploy_success: qaHelmDeploy.result == 'success' 
+
+### Report stg deployments
+
+  stgSendToSlackFail:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Failed API deploy to stg branch release-candidate failed***'
+    when:
+      condition:
+        any:
+          stgHelmDeploy_fail: stgHelmDeploy.result == 'failure'
+          stgHelmDeploy_error: stgHelmDeploy.result == 'error'   
+
+  stgSendToSlackPass:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API release-candidate deployed to stg'
+    when:
+      condition:
+        all:
+          stgHelmDeploy_success: stgHelmDeploy.result == 'success' 
+
+### Report preprod deployments
+
+  preprodSendToSlackFail:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Failed API deploy to preprod branch release-candidate failed***'
+    when:
+      condition:
+        any:
+          preprodHelmDeploy_fail: preprodHelmDeploy.result == 'failure'
+          preprodHelmDeploy_error: preprodHelmDeploy.result == 'error'   
+
+  preprodSendToSlackPass:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API release-candidate deployed to preprod'
+    when:
+      condition:
+        all:
+          preprodHelmDeploy_success: preprodHelmDeploy.result == 'success' 
+
+### Report prod deployments
+
+  prodSendToSlackFail:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Failed API deploy to prod branch release-candidate failed***'
+    when:
+      condition:
+        any:
+          prodHelmDeploy_fail: prodHelmDeploy.result == 'failure'
+          prodHelmDeploy_error: prodHelmDeploy.result == 'error'   
+
+  pordSendToSlackPass:
+    type: slack-notifier
+    stage: report
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'API release-candidate deployed to prod'
+    when:
+      condition:
+        all:
+          prodHelmDeploy_success: prodHelmDeploy.result == 'success' 

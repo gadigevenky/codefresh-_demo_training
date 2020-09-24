@@ -1,0 +1,136 @@
+version: '1.0'
+stages:
+  - build
+  - push
+  - test
+  - package
+  - deploy
+steps:
+  main_clone:
+    title: Cloning main repository...
+    type: git-clone
+    repo: '${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'
+    revision: '${{CF_REVISION}}'
+    git: ocr_bitbucket
+  helm_clone:
+    title: Cloning helm values repository...
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+  MyAppDockerImage:
+    title: Building Docker Image
+    stage: build
+    type: build
+    image_name: api
+    working_directory: ./
+    tag: '${{CF_BRANCH_TAG_NORMALIZED}}-${{CF_SHORT_REVISION}}'
+    dockerfile: Dockerfile
+  pushToMyRegistry:
+    stage: push
+    type: push
+    title: Pushing to a registry
+    candidate: ${{MyAppDockerImage}}
+    tag: '${{CF_BRANCH_TAG_NORMALIZED}}-${{CF_SHORT_REVISION}}'
+    registry: docker-snapshot
+#   MyUnitTests:
+#     title: Running Unit tests
+#     stage: test
+#     image: ${{MyAppDockerImage}}
+#     commands: 
+#       - python setup.py test   
+#   StoreChart:
+#     title: Storing Helm chart
+#     stage: deploy
+#     image: 'codefresh/cfstep-helm:2.9.1'
+#     environment:
+#       - ACTION=push
+#       - CHART_REF=charts/python
+  HelmChartGetVersion:
+    title: Get Helm Chart Version
+    stage: package
+    image: codefresh/cfstep-helm
+    working_directory: ${{main_clone}}
+    environment:
+      - CHART=api
+    commands:
+      - helm repo add helm ${{CF_CTX_helm_URL}} --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+      - yq .version ./charts/${CHART}/Chart.yaml
+      - export CURRENT_CHART_VERSION=`helm search helm/${CHART} | awk 'FNR==2{print $2}' || yq .version ./charts/${CHART}/Chart.yaml`
+      - echo ${CURRENT_CHART_VERSION}
+      - cf_export NEW_CHART_VERSION=`echo "${CURRENT_CHART_VERSION}" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g'`
+  HelmChartUpdate:
+    title: Update Helm Chart Version
+    stage: package
+    image: gksoftware/yq
+    working_directory: ${{main_clone}}
+    environment:
+      - CHART=api
+      - YAML_PATH=image
+    commands:
+      - yq w -i ./charts/${CHART}/Chart.yaml version ${NEW_CHART_VERSION}
+      - yq w -i ./charts/${CHART}/values.yaml ${YAML_PATH} ocrartifactory-docker-snapshot.jfrog.io/api:${{CF_BRANCH_TAG_NORMALIZED}}-${{CF_SHORT_REVISION}}
+  PushChartToHelmRepository:
+    title: Push Helm Chart to Repository
+    stage: package
+    image: codefresh/cfstep-helm
+    commands:
+      - helm repo add helm-local https://ocrartifactory.jfrog.io/ocrartifactory/helm-local --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+      - helm plugin install https://github.com/belitre/helm-push-artifactory-plugin
+      - helm push-artifactory ./charts/api helm-local
+  DeployMyChart:
+    image: dustinvanbuskirk/cfstep-helm:add-repo-update
+ #   image: 'codefresh/cfstep-helm:2.13.0'
+    title: Deploying Helm chart
+    stage: deploy
+    environment:
+      #- 'CHART_REPO_URL=https://ocrartifactory.jfrog.io/ocrartifactory/helm/'
+      - CHART_REF=helm/api
+      - RELEASE_NAME=api 
+     # - RELEASE_NAME=api2-test
+      - KUBE_CONTEXT=aws
+      - VALUE_imagePullPolicy=Always
+      #- VALUE_image='ocrartifactory-docker-snapshot.jfrog.io/api:${{CF_BRANCH_TAG_NORMALIZED}}-${{CF_SHORT_REVISION}}'
+      - VALUESFILE_prod=/codefresh/volume/kube-helm/Helm_values/api_helm_values_dev.yaml
+      - RECREATE_PODS=true
+      #- CHART_VERSION=0.2.4
+      - CHART_VERSION=${{NEW_CHART_VERSION}}
+    commands:
+      # Add aws-iam-authenticator binary
+      - curl -o aws-iam-authenticator https://amazon-eks.s3-us-west-2.amazonaws.com/1.12.7/2019-03-27/bin/linux/amd64/aws-iam-authenticator
+      - chmod +x ./aws-iam-authenticator
+      - mkdir -p $HOME/bin && cp ./aws-iam-authenticator $HOME/bin/aws-iam-authenticator && export PATH=$HOME/bin:$PATH
+      # Create custom Kube Config file
+      - ls /codefresh/volume/kube-helm/Helm_values
+      - export KUBECONFIG=./kubeconfig.yaml
+      - >-
+              echo 'apiVersion: v1
+              
+              kind: Config
+              
+              current-context: aws
+              
+              clusters:
+                - cluster:
+                    certificate-authority-data: ${{KUBERNETES_CA_CERT}}
+                    server: ${{KUBERNETES_SERVER}}
+                  name: aws
+              contexts:
+                - context:
+                    cluster: aws
+                    user: kubernetes-admin
+                  name: aws
+              users:
+                - name: kubernetes-admin
+                  user:
+                    exec:
+                      apiVersion: client.authentication.k8s.io/v1alpha1
+                      command: aws-iam-authenticator
+                      args:
+                        - "token"
+                        - "-i"
+                        - "${{CLUSTER_ID}}"
+                        - "-r"
+                        - "${{ROLE_ARN}}"' >> ./kubeconfig.yaml
+      # Run Helm Deploy
+      - /opt/bin/release_chart

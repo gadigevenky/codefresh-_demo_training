@@ -1,0 +1,196 @@
+version: '1.0'
+stages:
+  - prepare
+  - clone
+  - update_version
+  - 'build package'
+  - deploy
+
+steps:
+  SetTriggerVars:
+    title: Set trigger branch varables
+    stage: prepare
+    type: freestyle
+    image: alpine:latest
+    commands:
+      - cf_export API_BRANCH='${{CF_PULL_REQUEST_TARGET}}'
+      - cf_export TRIGGER_TYPE='Git pull request'
+    when:
+      condition:
+        any:   
+          whenTriggerExists: 'includes("${{CF_PULL_REQUEST_TARGET}}", "{{CF_PULL_REQUEST_TARGET}}") == false'
+
+  SetManualVars:
+    title: Set manual branch varables
+    stage: prepare
+    type: freestyle
+    image: alpine:latest
+    commands:
+      - cf_export API_BRANCH='${{CF_BRANCH}}'
+      - cf_export TRIGGER_TYPE='manual'
+    when:
+      condition:
+        any:   
+          whenTriggerExists: 'includes("${{CF_PULL_REQUEST_TARGET}}", "{{CF_PULL_REQUEST_TARGET}}") == true'
+
+  PreSendToSlack:
+    type: slack-notifier
+    stage: clone
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'Building by ${{TRIGGER_TYPE}} building docker container ${{API_BRANCH}}-${{CF_SHORT_REVISION}} for repo ${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'
+
+  project_clone:
+    title: Cloning main repository...
+    type: git-clone
+    stage: clone
+    repo: '${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'
+    revision: '${{API_BRANCH}}'
+    git: ocr_bitbucket
+
+  helm_clone: 
+    title: Cloning helm values repository...
+    stage: clone
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+
+  UpdateChartVersion:
+    title: Update Helm Chart Version and push
+    stage: update_version
+    fail_fast: false
+    type: freestyle
+    working_directory: ${{project_clone}}
+    environment:
+      - CHART=api
+    arguments:
+      image: 'ubuntu'
+      commands:
+        #Varable validation#
+        - echo API_BRANCH='${{API_BRANCH}}'
+        - echo CF_REPO_OWNER='${{CF_REPO_OWNER}}'
+        - echo CF_REPO_NAME='${{CF_REPO_NAME}}'
+        - echo CF_BRANCH='${{CF_BRANCH}}'
+        - echo CF_BASE_BRANCH='${{CF_BASE_BRANCH}}'
+        - echo CF_PULL_REQUEST_TARGET='${{CF_PULL_REQUEST_TARGET}}'
+        - echo CF_PULL_REQUEST_NUMBER='${{CF_PULL_REQUEST_NUMBER}}'
+        - echo CF_PULL_REQUEST_ID='${{CF_PULL_REQUEST_ID}}'
+        #End Varable validation#
+        - export CURRENT_CHART_VERSION=`echo | awk 'FNR==5{print $2}' charts/${CHART}/Chart.yaml`
+        - echo ${CURRENT_CHART_VERSION}
+        - NEW_CHART_VERSION=`echo $CURRENT_CHART_VERSION | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d\n", length($NF), ($NF+1)); print}'`
+        - export NEW_CHART_VERSION
+        - echo $NEW_CHART_VERSION
+        - sed -i "s/$CURRENT_CHART_VERSION/$NEW_CHART_VERSION/g" "charts/${CHART}/Chart.yaml"
+        - cat charts/${CHART}/Chart.yaml
+        - apt update
+        - apt install git -y        
+        - git config --global user.email "edge-slcdevops@ascentialedge.com"
+        - git config --global user.name "edge-slcdevops"
+        - git remote set-url origin https://edge-slcdevops:${{global_bitbucket_pass}}@bitbucket.org/ocrdevteam/api-2.git
+        - git pull
+        - git remote -v
+        - git add charts/${CHART}/Chart.yaml
+        - git commit -a -m "commit $NEW_CHART_VERSION"
+        - git push
+        - ls /codefresh/volume
+        - /codefresh/volume/./cf_export NEW_CHART_VERSION
+ 
+  BuildDockerImage:    
+    title: Building Docker Image
+    stage: 'build package'
+    type: build
+    fail_fast: false
+    image_name: api
+    working_directory: ${{project_clone}}
+    tag: '${{API_BRANCH}}-${{CF_SHORT_REVISION}}'
+    dockerfile: Dockerfile
+    registry: docker-snapshot 
+   
+  PushChartToHelmRepository:
+    title: Push Helm Chart to Repository
+    stage: 'build package'
+    image: codefresh/cfstep-helm
+    commands:
+      - helm repo add helm-local https://ocrartifactory.jfrog.io/ocrartifactory/helm-local --username ${{HELMREPO_USERNAME}} --password ${{HELMREPO_PASSWORD}}
+      - helm plugin install https://github.com/belitre/helm-push-artifactory-plugin
+      - helm push-artifactory /codefresh/volume/api-2/charts/api helm-local
+
+  PostSendToSlackFail:
+      image: ubuntu
+      title: Post send to Slack fail
+      stage: 'build package'
+      commands:
+        - apt update && apt install curl -y
+        - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"*** Failed API build ${{CF_REPO_OWNER}}/${{CF_REPO_NAME}} branch ${{API_BRANCH}}-${{CF_SHORT_REVISION}} failed***"}' https://hooks.slack.com/services/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
+        - exit 1
+      when:
+        condition:
+          any:
+            UpdateChartVersion_fail: UpdateChartVersion.result == 'failure'
+            BuildDockerImage_fail: BuildDockerImage.result == 'failure'
+            PushChartToHelmRepository_fail: PushChartToHelmRepository.result == 'failure'
+            UpdateChartVersion_error: UpdateChartVersion.result == 'error'
+            BuildDockerImage_error: BuildDockerImage.result == 'error'
+            PushChartToHelmRepository_error: PushChartToHelmRepository.result == 'error'
+  
+  PostSendToSlackPass:
+    type: slack-notifier
+    stage: 'build package'
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: 'Build complete for ${{API_BRANCH}}-${{CF_SHORT_REVISION}} for repo ${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'      
+
+  # parallel_deploy_steps:
+  #   type: parallel
+  #   stage: deploy 
+  #   steps:
+  call_deploy_pipeline:
+    title: Call deploy pipeline
+    stage: deploy
+    type: codefresh-run
+    fail_fast: false
+    arguments:
+      PIPELINE_ID: EMS-API-2/EMS-API2-Deploy
+      VARIABLE:
+        - CF_BRANCH=${{CF_BRANCH}}
+        - CF_REVISION=${{CF_REVISION}}
+        - NEW_CHART_VERSION=${{NEW_CHART_VERSION}}    
+        - API_BRANCH=${{API_BRANCH}}
+        - CF_SHORT_REVISION=${{CF_SHORT_REVISION}}  
+        - dev_Branch='deploy'
+        - qa_Branch='deploy'
+
+#       call_qa_pipeline:
+#         title: Deploy to QA
+#         stage: deploy
+#         type: codefresh-run
+#         arguments:
+#           PIPELINE_ID: EMS-API-2/EMS-API2-DeployQA
+#           VARIABLE:
+#             - CF_BRANCH=${{CF_BRANCH}}
+#             - CF_REVISION=${{CF_REVISION}}
+#             - NEW_CHART_VERSION=${{NEW_CHART_VERSION}}      
+#             - API_BRANCH=${{API_BRANCH}}
+#             - CF_SHORT_REVISION=${{CF_SHORT_REVISION}}  
+# #            - qa_Branch='deploy'            
+
+  devSendToSlackFailDeploy:
+    type: slack-notifier
+    stage: 'build package'
+    arguments:
+#      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_codefresh
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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' #ems_deployment-request
+      SLACK_TEXT: '*** Call to API deploy failed***'
+    when:
+      condition:
+        any:
+          call_deploy_pipeline_fail: call_deploy_pipeline.result == 'failure'
+          call_deploy_pipeline_error: call_deploy_pipeline.result == 'error'
+
+
+        
+

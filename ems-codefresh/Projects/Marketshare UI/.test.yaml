@@ -1,0 +1,30 @@
+parallel_deploy_steps:
+    type: parallel
+    stage: deploy 
+    steps:
+      call_dev_pipeline:
+        title: Deploy to Dev
+        stage: deploy
+        type: codefresh-run
+        arguments:
+          PIPELINE_ID: EMS-API-2/EMS-API2-DeployDev
+          VARIABLE:
+            - CF_BRANCH=${{CF_BRANCH}}
+            - CF_REVISION=${{CF_REVISION}}
+            - NEW_CHART_VERSION=${{NEW_CHART_VERSION}}    
+            - CF_BRANCH_TAG_NORMALIZED=${{CF_BRANCH_TAG_NORMALIZED}}
+            - CF_SHORT_REVISION=${{CF_SHORT_REVISION}}  
+
+      call_qa_pipeline:
+        title: Deploy to QA
+        stage: deploy
+        type: codefresh-run
+        arguments:
+          PIPELINE_ID: EMS-API-2/EMS-API2-DeployQA
+          VARIABLE:
+            - CF_BRANCH=${{CF_BRANCH}}
+            - CF_REVISION=${{CF_REVISION}}
+            - NEW_CHART_VERSION=${{NEW_CHART_VERSION}}      
+            - CF_BRANCH_TAG_NORMALIZED=${{CF_BRANCH_TAG_NORMALIZED}}
+            - CF_SHORT_REVISION=${{CF_SHORT_REVISION}}  
+

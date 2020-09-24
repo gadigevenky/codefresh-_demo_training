@@ -1,0 +1,133 @@
+version: "1.0"
+# Stages can help you organize your steps in stages
+stages:
+  - clone
+  - test_build
+  - tests
+
+steps:
+  fix_step:
+    title: fix /codefresh/volume/firestorm
+    image: alpine:latest
+    stage: clone
+    commands:
+      - rm -rf /codefresh/volume/firestorm
+
+  project_clone:
+    title: Cloning project repository...
+    type: git-clone
+    repo: ocrdevteam/firestorm
+    revision: ${{CF_BRANCH}}
+    git: ocr_bitbucket
+    stage: clone
+    fail_fast: true
+
+  render_dev_env_file:
+    image: codefresh/cfstep-helm
+    working_directory: ${{project_clone}}
+    fail_fast: false
+    commands:
+      - cp /codefresh/volume/firestorm/deploymentFiles/template.env /codefresh/volume/firestorm/deploymentFiles/template1.env
+      - cat /codefresh/volume/firestorm/deploymentFiles/template1.env
+      - sed -e 's/REACT_APP_LOOKER_SECRET=/REACT_APP_LOOKER_SECRET=${{global_looker_key}}/' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_MS_API_LEGACY=,REACT_APP_MS_API_LEGACY=${{dev_react_app_ms_api_legacy}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_MS_API_NEW=,REACT_APP_MS_API_NEW=${{dev_react_app_ms_api_new}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_INTERCOM_APP_ID=,REACT_APP_INTERCOM_APP_ID=${{dev_react_app_intercom_app_id}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_GOOGLE_ANALYTICS_TAG_ID=,REACT_APP_GOOGLE_ANALYTICS_TAG_ID=${{dev_qa_stg_react_app_google_analytics_tag_id}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_NEW_RELIC_APP_ID=,REACT_APP_NEW_RELIC_APP_ID=${{DEV_REACT_APP_NEW_RELIC_APP_ID}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - cat /codefresh/volume/firestorm/deploymentFiles/template.env
+      # - cat /codefresh/volume/firestorm/deploymentFiles/.env_dev
+    stage: test_build
+    
+  build_step:
+    title: Building Docker image and pushing to artifactory...
+    type: build
+    image_name: firestorm 
+    working_directory: ${{project_clone}}
+    tag: ${{CF_BRANCH_TAG_NORMALIZED}}_test-dev
+    build_arguments:
+      - CODE_ENVIRONMENT=codefresh
+    dockerfile: Dockerfile
+    stage: test_build
+    registry: docker-snapshot
+    fail_fast: false
+
+### integration test
+  integration_tests:
+    type: composition
+    stage: tests
+    composition:
+      version: '2'
+      services:
+        marketshare_ui:
+          image: ${{build_step}}
+          ports:
+            - 80
+            - 8443
+    composition-candidates:
+      main:
+        image: nhoag/curl
+        command:  bash -c "sleep 30 && curl http://marketshare_ui" | echo 'works'
+
+  integration_tests_fail:
+    image: ubuntu
+    title: Checking unit_tests_fail
+    stage: tests
+    commands:
+      - apt update && apt install curl -y
+      #- curl -X POST -H 'Content-type:\ application/json' --data '{"text":"MarketshareUI Integration Test has Failed"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          integration_tests_fail: integration_tests.result == 'failure'
+          integration_tests_error: integration_tests.result == 'error'
+
+ ### Unit Tests   
+  unit_tests:
+    title: npm test
+    description: run npm test
+    stage: tests
+    image: node:12.18.3
+    working_directory: ${{project_clone}}
+    fail_fast: false
+    commands:
+      - ls
+      - pwd      
+      - npm install
+      - npm test
+      - apt update && apt install curl git -y
+      - git config --global user.email "edge-slcdevops@ascentialedge.com"
+      - git config --global user.name "edge-slcdevops"
+      - git remote set-url origin https://edge-slcdevops:${{global_bitbucket_pass}}@bitbucket.org/ocrdevteam/firestorm.git
+      - export SUCCESSFUL_COMMIT=`echo | git rev-parse HEAD`
+      - echo ${SUCCESSFUL_COMMIT}
+      - curl -X POST -u edge-slcdevops:${{global_bitbucket_pass}} https://api.bitbucket.org/2.0/repositories/ocrdevteam/firestorm/commit/${SUCCESSFUL_COMMIT}/statuses/build -d '{"url":"https://g.codefresh.io/build/${{CF_BUILD_ID}}","key":"codefresh","state":"SUCCESSFUL"}' -H "Content-Type:application/json"
+      - echo ${{CF_BUILD_ID}}
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"MarketshareUI Unit Tests / NPM Test has Passed for branch - ${{CF_BRANCH_TAG_NORMALIZED}}"}' https://hooks.slack.com/services/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
+
+  unit_tests_fail:
+    image: ubuntu
+    title: Checking unit_tests_fail
+    stage: tests
+    working_directory: ${{project_clone}}
+    commands:
+      - apt update && apt install curl -y
+      - apt update
+      - apt install git -y  
+      - git config --global user.email "edge-slcdevops@ascentialedge.com"
+      - git config --global user.name "edge-slcdevops"
+        # - ssh-keyscan -t rsa bitbucket.org >> ~/.ssh/known_hosts
+      - git remote set-url origin https://edge-slcdevops:${{global_bitbucket_pass}}@bitbucket.org/ocrdevteam/firestorm.git
+      - git pull
+      - export FAILED_COMMIT=`echo | git rev-parse HEAD`
+      - echo ${FAILED_COMMIT}
+      - curl -X POST -u edge-slcdevops:${{global_bitbucket_pass}} https://api.bitbucket.org/2.0/repositories/ocrdevteam/firestorm/commit/${FAILED_COMMIT}/statuses/build -d '{"url":"https://g.codefresh.io/build/${{CF_BUILD_ID}}","key":"codefresh","state":"FAILED"}' -H "Content-Type:application/json"
+      - echo ${{CF_BUILD_ID}}
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"MarketshareUI Unit Tests / NPM Test has Failed for branch - ${{CF_BRANCH_TAG_NORMALIZED}}"}' https://hooks.slack.com/services/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
+      # - exit 1
+    when:
+      condition:
+        any:
+          unit_tests_fail: unit_tests.result == 'failure'
+          unit_tests_error: unit_tests.result == 'error'

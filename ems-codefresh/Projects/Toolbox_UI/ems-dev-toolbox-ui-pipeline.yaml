@@ -1,0 +1,195 @@
+# More examples of Codefresh YAML can be found at
+# https://codefresh.io/docs/docs/yaml-examples/examples/
+
+version: "1.0"
+# Stages can help you organize your steps in stages
+stages:
+  - clone
+  - version_render_operations
+  - build_push_operations
+  - test
+  - eks_deploy
+  - end_slack_notify
+  
+steps:
+
+  StartSendToSlack:
+    type: slack-notifier
+    stage: clone
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'  
+      SLACK_TEXT: 'Starting Deploy for ToolboxUI Dev'
+
+  fix_step:
+    title: fix /codefresh/volume/toolbox-frontend
+    image: alpine:latest
+    stage: clone
+    commands:
+      - rm -rf /codefresh/volume/toolbox-frontend
+      - rm -rf /codefresh/volume/kube-helm
+
+  project_clone:
+    title: Cloning project repository...
+    type: git-clone
+    repo: ocrdevteam/toolbox-frontend
+    # CF_BRANCH value is auto set when pipeline is triggered
+    # Learn more at codefresh.io/docs/docs/codefresh-yaml/variables/
+    revision: ${{CF_BRANCH}}
+    git: ocr_bitbucket
+    stage: clone
+    fail_fast: true
+
+  helm_clone:
+    title: Cloning helm values repository...
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+    stage: clone
+
+  UpdateChartVersion:
+    title: Update Helm Chart Version and push
+    stage: version_render_operations
+    type: freestyle
+    working_directory: ${{project_clone}}
+    environment:
+      - CHART=toolbox-ui
+    arguments:
+      image: 'ubuntu'
+      commands:
+        - export CURRENT_CHART_VERSION=`echo | awk 'FNR==5{print $2}' charts/${CHART}/Chart.yaml`
+        - echo ${CURRENT_CHART_VERSION}
+        - NEW_CHART_VERSION=`echo $CURRENT_CHART_VERSION | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d\n", length($NF), ($NF+1)); print}'`
+        - export NEW_CHART_VERSION
+        - echo $NEW_CHART_VERSION
+        - sed -i "s/$CURRENT_CHART_VERSION/$NEW_CHART_VERSION/g" "charts/${CHART}/Chart.yaml"
+        - cat charts/${CHART}/Chart.yaml
+        - apt update
+        - apt install git -y        
+        - git config --global user.email "edge-slcdevops@ascentialedge.com"
+        - git config --global user.name "edge-slcdevops"
+        # - ssh-keyscan -t rsa bitbucket.org >> ~/.ssh/known_hosts
+        - git remote set-url origin https://edge-slcdevops:${{global_bitbucket_pass}}@bitbucket.org/ocrdevteam/toolbox-frontend.git
+        - git pull
+        - git remote -v
+        - git add charts/${CHART}/Chart.yaml
+        - git commit -a -m "commit $NEW_CHART_VERSION"
+        - git push
+        - ls /codefresh/volume
+        - /codefresh/volume/./cf_export NEW_CHART_VERSION
+
+  render_dev_env_file:
+    image: ubuntu
+    working_directory: ${{project_clone}}
+    fail_fast: false
+    commands:
+      - cp /codefresh/volume/toolbox-frontend/deploymentFiles/template.env /codefresh/volume/toolbox-frontend/deploymentFiles/template1.env
+      - cat /codefresh/volume/toolbox-frontend/deploymentFiles/template1.env
+      - sed -e 's,REACT_APP_OCR_API_URL=,REACT_APP_OCR_API_URL=${{dev_react_app_ms_api_legacy}},g' -i /codefresh/volume/toolbox-frontend/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_TOOLBOX_API_URL=,REACT_APP_TOOLBOX_API_URL=${{dev_react_app_toolbox_api}},g' -i /codefresh/volume/toolbox-frontend/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_MS_API_NEW=,REACT_APP_MS_API_NEW=${{dev_react_app_ms_api_new}},g' -i /codefresh/volume/toolbox-frontend/deploymentFiles/template.env
+      - cat /codefresh/volume/toolbox-frontend/deploymentFiles/template.env
+      # - cat /codefresh/volume/firestorm/deploymentFiles/.env_dev
+    stage: version_render_operations
+
+  version_render_operations_fail:
+    image: ubuntu
+    title: Checking version render operations
+    stage: version_render_operations
+    commands:
+      - apt update && apt install curl -y
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"ToolboxUI Dev version_render_operations failed exit pipeline"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          UpdateChartVersion_fail: UpdateChartVersion.result == 'failure'
+          render_dev_env_file_fail: render_dev_env_file.result == 'failure'
+          UpdateChartVersion_error: UpdateChartVersion.result == 'error'
+          render_dev_env_error: render_dev_env_file.result == 'error'
+
+  BuildSendToSlack:
+    type: slack-notifier
+    stage: build_push_operations
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Building Image for ToolboxUI Dev'
+
+  build:
+    title: Building Docker image and pushing to artifactyory...
+    type: build
+    image_name: toolbox-ui
+    working_directory: ${{project_clone}}
+    tag: ${{CF_BRANCH_TAG_NORMALIZED}}_branch-dev
+    build_arguments:
+      - CODE_ENVIRONMENT=codefresh
+    dockerfile: Dockerfile
+    stage: build_push_operations
+    registry: docker-snapshot
+    fail_fast: false
+
+  helm_package_push:
+    title: Push Helm Chart to Repository
+    stage: build_push_operations
+    image: codefresh/cfstep-helm
+    environment:
+      - CHART=toolbox-ui
+    commands:
+      - helm repo add helm-local https://ocrartifactory.jfrog.io/ocrartifactory/helm-local --username ${{global_helmrepo_username}} --password ${{global_helmrepo_password}}
+      - helm plugin install https://github.com/belitre/helm-push-artifactory-plugin
+      - helm push-artifactory /codefresh/volume/toolbox-frontend/charts/${CHART} helm-local
+
+  build_push_operations_fail:
+    image: ubuntu
+    title: Checking build_push_operations
+    stage: build_push_operations
+    commands:
+      - apt update && apt install curl -y
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"ToolboxUI Dev build_push_operations failed exit pipeline"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          build_fail: build.result == 'failure'
+          helm_package_push_fail: helm_package_push.result == 'failure'
+          build_error: build.result == 'error'
+          helm_package_push_file: helm_package_push.result == 'error'
+
+  eks_helm_deploy:
+    title: Deploy to AWS Dev EKS with Helm
+    stage: eks_deploy
+    type: helm
+    #working_directory: ${{helm_clone}}
+    arguments:
+      action: auth
+      helm_version: 3.0.2
+      kube_context: ocr-aws-dev-eks001
+      commands:
+        - source /opt/bin/release_chart        
+        - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{global_helmrepo_username}} --password ${{global_helmrepo_password}}
+        - helm repo update
+        - helm list
+        - ls kube-helm/Helm_values/Toolbox_UI -lah
+        - helm upgrade toobox-ui-dev helm/toolbox-ui -f kube-helm/Helm_values/Toolbox_UI/toolbox_ui_dev_values.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/toolbox-ui:${{CF_BRANCH_TAG_NORMALIZED}}_branch-dev --version=${{NEW_CHART_VERSION}} #--version=0.r0.24
+        - echo $NEW_CHART_VERSION
+
+  eks_deploy_fail:
+    image: ubuntu
+    title: Checking eks_deploy
+    stage: eks_deploy
+    commands:
+      - apt update && apt install curl -y
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"ToolboxUI Dev eks_deploy failed exit pipeline"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          eks_deploy_fail: eks_deploy.result == 'failure'
+          eks_deploy_error: eks_deploy.result == 'error'
+          
+  EndSendToSlack:
+    type: slack-notifier
+    stage: eks_deploy
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Successful Deploy for ToolboxUI Dev'

@@ -1,0 +1,138 @@
+version: '1.0'
+stages:
+  - clone
+#  - build
+  - test
+
+steps:
+  project_clone:
+    title: Cloning main repository...
+    type: git-clone
+    stage: clone
+    repo: '${{CF_REPO_OWNER}}/${{CF_REPO_NAME}}'
+    revision: '${{CF_BRANCH}}'
+    git: ocr_bitbucket
+
+  helm_clone: 
+    title: Cloning helm values repository...
+    stage: clone
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+
+  # build_test_image:
+  #   title: Building Docker image and pushing to artifactory...
+  #   type: build
+  #   image_name: api2_mysql_tests 
+  #   working_directory: ${{project_clone}}
+  #   tag: api_test
+  #   dockerfile: Dockerfile
+  #   stage: build
+  #   registry: docker-snapshot
+  #   fail_fast: false  
+
+  run_integration_tests:
+    title: "Running integration tests"
+    stage: test
+    image: ocrartifactory-docker-snapshot.jfrog.io/api:release-candidate
+    environment: &test_mysql_vars
+      - MYSQL_ROOT_PASSWORD=UEjYPfS2fXg9zc6KjYKLdGfTR2skRg2DZnbe7q35qjrQYXCE
+      - MYSQL_USER=my_user
+      - MYSQL_PASSWORD=UEjYPfS2fXg9zc6KjYKLdGfTR2skRg2DZnbe7q35qjrQYXCE
+      - MYSQL_DATABASE=edge_temp
+      - MYSQL_HOST=test_mysql_db
+    commands:
+      # MySQL is certainly up at this point
+          - "hostname"
+          - "echo $MYSQL_USER"
+          # - "mysql --user=my_user --password=UEjYPfS2fXg9zc6KjYKLdGfTR2skRg2DZnbe7q35qjrQYXCE -h test_mysql_db --connect-timeout=1"
+          # - "curl -sL http://test_mysql_db:3306"
+
+    services:
+      composition:
+        test_mysql_db:
+          image: mysql:5.7
+          ports:
+            - 3306
+          environment: *test_mysql_vars # Same MYSQL_HOST, MYSQL_USER etc.
+      readiness:
+        timeoutSeconds: 90
+        periodSeconds: 45
+        image: mysql:5.7
+          # ocrartifactory-docker-snapshot.jfrog.io/api:release-candidate
+        commands:
+          - "mysql --user=my_user --password=UEjYPfS2fXg9zc6KjYKLdGfTR2skRg2DZnbe7q35qjrQYXCE -h test_mysql_db -e 'SHOW DATABASES'"
+          # - "curl -sL http://test_mysql_db:3306"   
+          # - "nc -z test_mysql_db 3306"
+
+
+
+  # BuildDockerImage:    
+  #   title: Building Docker Image
+  #   stage: build 
+  #   type: build
+  #   image_name: api
+  #   working_directory: ${{project_clone}}
+  #   tag: test_candidate       
+  #   dockerfile: Dockerfile
+  #   registry: docker-snapshot     
+
+  # ContainerTesting:
+  #   type: composition
+  #   title: "Container tests"
+  #   stage: test
+  #   composition:
+  #       version: 2
+  #       services:
+  #         api2:
+  #           image: '${{api_build}}'
+  #           ports:
+  #             -80
+  #   services:  
+  #     composition:
+  #       test_mysql_db:
+  #           image: mysql:5.7
+  #           ports:
+  #           - 3306
+  #           environment: # *test_mysql_vars # Same MYSQL_HOST, MYSQL_USER etc.
+  #       readiness:
+  #         timeoutSeconds: 30
+  #         periodSeconds: 15      
+  #         image: '${{api_build}}'
+  #         commands:
+  #           - "hostname"
+  #           - "nslookup test_mysql_db"   
+    # registry: docker-snapshot
+    # fail_fast: false
+
+    # commands:
+    #   # MySQL is certainly up at this point
+    #       - pwd
+    #       - curl
+    #       - "composue test"
+    #       - "mysql -h localhost -u admin -p admin"
+    # services:
+    #   composition:
+    #     test_mysql_db:
+    #       image: mysql:5.7
+      #     ports:
+      #       - 3306
+      #     environment: # *test_mysql_vars # Same MYSQL_HOST, MYSQL_USER etc.
+      # readiness:
+      #   timeoutSeconds: 30
+      #   periodSeconds: 15
+      #   image: 'ben2020-07-22.1-53e7e86'
+      #   environment: &test_mysql_vars
+      #     - EXTERNAL_CONNECTIONS.LOOKER.EMBED_DOMAIN=${{EXTERNAL_CONNECTIONS.LOOKER.EMBED_DOMAIN}}
+      #     - EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID=${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID}}
+      #     - EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET=${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_SECRET}}
+      #     - EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID=${{EXTERNAL_CONNECTIONS.LOOKER.CLIENT_ID}}
+      #   commands:
+      #     - "nslookup test_mysql_db"   
+      #     - "composue test"
+      #     - "composure lint"
+      #     - curl
+      #     - "mysql -h test_mysql_db -u admin -p admin"
+
+

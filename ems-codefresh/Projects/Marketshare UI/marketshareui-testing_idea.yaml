@@ -1,0 +1,66 @@
+# ci-insights_api
+integration_tests:
+    title: Integration tests
+    type: freestyle
+    stage: tests
+    fail_fast: false
+    image: '987748204332.dkr.ecr.eu-west-1.amazonaws.com/create-image-ruby:1.0.1'
+    working_directory: ./
+    tag: 1.0.1
+    shell: bash
+    registry: eds_ecr_eu
+    commands:
+      - service mysqld start || true
+      - chown -R mysql:mysql /var/lib/mysql /var/run/mysqld
+      - service mysqld start
+      - service postgresql96 start
+      - source "/usr/local/rvm/scripts/rvm"
+      - rvm install $(cat .ruby-version | sed "s/ruby-//")
+      - rvm use $(cat .ruby-version | sed "s/ruby-//")
+      - gem install bundler -v 1.17.3
+      - bundle install      
+      - ./gradlew -DrefSpec=+refs/heads/*:refs/remotes/origin/* -DSQL_PASSWORD=ZfQx3wek -DintegrationTestDbName_MySQL=squirrel_test createTestDb clean assemble
+  security_tests:
+    title: Security tests
+    type: freestyle
+    stage: tests
+    fail_fast: false
+    image: '987748204332.dkr.ecr.eu-west-1.amazonaws.com/create-image-ruby:1.0.1'
+    working_directory: ./
+    tag: 1.0.1
+    shell: bash
+    registry: eds_ecr_eu
+    commands:
+      - source "/usr/local/rvm/scripts/rvm"
+      - rvm install $(cat .ruby-version | sed "s/ruby-//")
+      - rvm use $(cat .ruby-version | sed "s/ruby-//")
+      - gem install bundler -v 1.17.3
+      - bundle install
+      - mkdir -p brakeman-coverage-report
+      - brakeman -o brakeman-coverage-report/brakeman-output.html
+  test_reporting_step:
+    title: Upload unit test reports
+    stage: tests
+    image: codefresh/cf-docker-test-reporting
+    working_directory: ./
+    environment:
+      - REPORT_DIR.0=coverage/rcov
+      - REPORT_INDEX_FILE.0=index.html
+      - REPORT_TYPE.0=integration
+      - REPORT_DIR.1=brakeman-coverage-report
+      - REPORT_INDEX_FILE.1=brakeman-output.html
+      - REPORT_TYPE.1=security
+      - BUCKET_NAME=eds-codefresh-build-logs
+      - CF_STORAGE_INTEGRATION=eds-codefresh-build-logs
+  fail_build_if_failed_tests:
+    image: 'alpine:latest'
+    title: Checking Unit test result
+    stage: tests
+    commands:
+      - 'echo "Unit tests failed, marking the whole pipeline as failed"'
+      - exit 1
+    when:
+      condition:
+        any:
+          security_tests: security_tests.result == 'failure'
+          integration_tests: integration_tests.result == 'failure'

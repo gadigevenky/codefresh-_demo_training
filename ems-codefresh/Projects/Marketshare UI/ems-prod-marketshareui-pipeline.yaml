@@ -1,0 +1,203 @@
+# More examples of Codefresh YAML can be found at
+# https://codefresh.io/docs/docs/yaml-examples/examples/
+
+version: "1.0"
+stages:
+  - clone
+  - build_push_operations
+  # - test
+  - eks_deploy
+  - end_slack_notify
+  
+steps:
+
+  StartSendToSlack:
+    type: slack-notifier
+    stage: clone
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Starting Deploy for MarketshareUI Prod'
+
+  fix_step:
+    title: fix /codefresh/volume/firestorm
+    image: alpine:latest
+    stage: clone
+    commands:
+      - rm -rf /codefresh/volume/firestorm
+      - rm -rf /codefresh/volume/kube-helm
+
+  project_clone:
+    title: Cloning project repository...
+    type: git-clone
+    repo: ocrdevteam/firestorm
+    revision: ${{CF_BRANCH}}
+    git: ocr_bitbucket
+    stage: clone
+    fail_fast: true
+    
+  helm_clone:
+    title: Cloning helm values repository...
+    type: git-clone
+    repo: 'ocrdevteam/kube-helm'
+    revision: master
+    git: ocr_bitbucket
+    stage: clone
+
+  GetChartVersion:
+    title: Get Helm Chart Version
+    stage: build_push_operations
+    type: freestyle
+    working_directory: ${{project_clone}}
+    environment:
+      - CHART=firestorm
+    arguments:
+      image: 'ubuntu'
+      commands:
+        - export CURRENT_CHART_VERSION=`echo | awk 'FNR==5{print $2}' charts/${CHART}/Chart.yaml`
+        - echo ${CURRENT_CHART_VERSION}
+      #   - NEW_CHART_VERSION=`echo $CURRENT_CHART_VERSION | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d\n", length($NF), ($NF+1)); print}'`
+      #   # in perl - NEW_CHART_VERSION=`echo $CURRENT_CHART_VERSION | perl -ne 'chomp; print join(".", splice(@{[split/\./,$_]}, 0, -1), map {++$_} pop @{[split/\./,$_]}), "\n";'`
+      #  # - NEW_CHART_VERSION=`echo $CURRENT_CHART_VERSION | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{if(length($NF+1)>length($NF))$(NF-1)++; $NF=sprintf("%0*d", length($NF), ($NF+1)%(10^length($NF))); print}'`
+      #   - export NEW_CHART_VERSION
+      #   - echo $NEW_CHART_VERSION
+      #   - sed -i "s/$CURRENT_CHART_VERSION/$NEW_CHART_VERSION/g" "charts/${CHART}/Chart.yaml"
+      #   - cat charts/${CHART}/Chart.yaml
+      #   - apt update
+      #   - apt install git -y        
+      #   - git config --global user.email "edge-slcdevops@ascentialedge.com"
+      #   - git config --global user.name "edge-slcdevops"
+      #   # - ssh-keyscan -t rsa bitbucket.org >> ~/.ssh/known_hosts
+      #   - git remote set-url origin https://edge-slcdevops:${{global_bitbucket_pass}}@bitbucket.org/ocrdevteam/firestorm.git
+      #   - git pull
+      #   - git remote -v
+      #   - git add charts/${CHART}/Chart.yaml
+      #   - git commit -a -m "commit $NEW_CHART_VERSION"
+      #   - git push
+      #   - ls /codefresh/volume
+        - /codefresh/volume/./cf_export CURRENT_CHART_VERSION
+
+  helm_package_push:
+    title: Build and Push Prod Helm Chart to Repository
+    stage: build_push_operations
+    image: codefresh/cfstep-helm
+    environment:
+      - CHART=firestorm
+    commands:
+      - helm repo add helm-local https://ocrartifactory.jfrog.io/ocrartifactory/helm-local --username ${{global_helmrepo_username}} --password ${{global_helmrepo_password}}
+      - helm plugin install https://github.com/belitre/helm-push-artifactory-plugin
+      - helm push-artifactory /codefresh/volume/firestorm/charts/${CHART} helm-local        
+
+  BuildSendToSlack:
+    type: slack-notifier
+    stage: build_push_operations
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Building Image for MarketshareUI Prod'
+
+  render_prod_env_file:
+    title: Render Prod Env File
+    image: codefresh/cfstep-helm
+    working_directory: ${{project_clone}}
+    fail_fast: false
+    commands:
+      - cp /codefresh/volume/firestorm/deploymentFiles/template.env /codefresh/volume/firestorm/deploymentFiles/template1.env
+      - cat /codefresh/volume/firestorm/deploymentFiles/template1.env
+      - sed -e 's/REACT_APP_LOOKER_SECRET=/REACT_APP_LOOKER_SECRET=${{global_looker_key}}/' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_MS_API_LEGACY=,REACT_APP_MS_API_LEGACY=${{prod_react_app_ms_api_legacy}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_MS_API_NEW=,REACT_APP_MS_API_NEW=${{prod_react_app_ms_api_new}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_INTERCOM_APP_ID=,REACT_APP_INTERCOM_APP_ID=${{prod_react_app_intercom_app_id}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_GOOGLE_ANALYTICS_TAG_ID=,REACT_APP_GOOGLE_ANALYTICS_TAG_ID=${{prod_react_app_google_analytics_tag_id}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - sed -e 's,REACT_APP_NEW_RELIC_APP_ID=,REACT_APP_NEW_RELIC_APP_ID=${{PROD_REACT_APP_NEW_RELIC_APP_ID}},g' -i /codefresh/volume/firestorm/deploymentFiles/template.env
+      - cat /codefresh/volume/firestorm/deploymentFiles/template.env
+    stage: build_push_operations
+    
+  build:
+    title: Building Prod Docker image and pushing to artifactyory...
+    type: build
+    image_name: firestorm
+    working_directory: ${{project_clone}}
+    tag: ${{CF_BRANCH_TAG_NORMALIZED}}_branch-prod
+    build_arguments:
+      - CODE_ENVIRONMENT=codefresh
+    dockerfile: Dockerfile
+    stage: build_push_operations
+    registry: docker-snapshot
+    fail_fast: false
+
+  build_qa_stg_check:
+    image: ubuntu
+    title: Checking build_push_operations prod
+    stage: build_push_operations
+    commands:
+      - apt update && apt install curl -y
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"MarketshareUI Prod build_push_operations failed exit pipeline"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          GetChartVersion_fail: GetChartVersion.result == 'failure'
+          helm_package_push_fail: helm_package_push.result == 'failure'
+          render_prod_env_file_fail: render_prod_env_file.result == 'failure'
+          build_fail: build.result == 'failure'
+          GetChartVersion_error: GetChartVersion.result == 'error'
+          helm_package_push_error: helm_package_push.result == 'error'
+          render_prod_env_file_error: render_prod_env_file.result == 'error'
+          build_error: build.result == 'error'
+
+  # test:
+  #   title: "Running test"
+  #   type: "freestyle" 
+  #   image: node:10.16.3-alpine
+  #   #image: "${{build}}" # The image in which command will be executed
+  #   working_directory: "${{project_clone}}" # Running command where code cloned
+  #   commands:
+  #     - "npm install"
+  #     - "npm start"
+  #     - "npm update"
+  #     - "npm test"
+  #   stage: "test" 
+
+  DeploySendToSlack:
+    type: slack-notifier
+    stage: eks_deploy
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Deploying MarketShare UI to PROD EKS'
+
+  eks_helm_deploy:
+    title: Deploy to AWS Prod EKS with Helm
+    stage: eks_deploy
+    type: helm    
+    arguments:
+      action: auth
+      helm_version: 3.0.2
+      kube_context: ocr-aws-prod-eks001
+      commands:
+        - source /opt/bin/release_chart
+        #- export DEPLOY_CHART_VERSION=`echo | awk 'FNR==5{print $2}' firestorm/charts/firestorm/Chart.yaml`
+        - helm repo add helm https://ocrartifactory.jfrog.io/ocrartifactory/helm --username ${{global_helmrepo_username}} --password ${{global_helmrepo_password}}
+        #- helm repo add stable https://kubernetes-charts.storage.googleapis.com
+        - helm repo update
+        #- helm upgrade firestorm-test-prod helm/firestorm -f kube-helm/Helm_values/Marketshare/marketshare-codefresh_test_values.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/firestorm:${{CF_BRANCH_TAG_NORMALIZED}}_branch-prod --recreate-pods --version=${{CURRENT_CHART_VERSION}} #--version=0.r0.24
+        - helm upgrade marketshare-firestorm helm/firestorm -f kube-helm/Helm_values/Marketshare/marketshare-prod_values.yaml --set image=ocrartifactory-docker-snapshot.jfrog.io/firestorm:${{CF_BRANCH_TAG_NORMALIZED}}_branch-prod --version=${{CURRENT_CHART_VERSION}} --namespace marketshare
+
+  eks_deploy_check:
+    image: ubuntu
+    title: Checking eks_deploy
+    stage: eks_deploy
+    commands:
+      - apt update && apt install curl -y
+      - curl -X POST -H 'Content-type:\ application/json' --data '{"text":"MarketshareUI Prod eks_deploy failed exit pipeline"}' https://hooks.slack.com/services/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
+      - exit 1
+    when:
+      condition:
+        any:
+          eks_helm_deploy_fail: eks_helm_deploy.result == 'failure'
+          eks_helm_deploy_error: eks_helm_deploy.result == 'error'
+      
+  EndSendToSlack:
+    type: slack-notifier
+    stage: eks_deploy
+    arguments:
+      SLACK_HOOK_URL: 'https://hooks.slack.com/services/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'
+      SLACK_TEXT: 'Successful Deploy for MarketshareUI Prod'
